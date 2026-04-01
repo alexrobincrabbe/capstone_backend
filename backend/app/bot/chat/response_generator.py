@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 import re
 
-from .llm_client import OpenAIClient
-from .models import ChatRoute, ReplyContext
+from .langchain_integration import get_chat_model
+from ..models import ChatRoute, ReplyContext
 from .prompts import (
     response_system_prompt_join,
     response_system_prompt_rich,
@@ -24,15 +24,16 @@ class OpenAIBotResponseGenerator(BotResponseGenerator):
     def __init__(
         self,
         *,
-        client: OpenAIClient,
+        client=None,
         model: str,
         bot_name: str,
         trace_enabled: bool = False,
     ) -> None:
-        self.client = client
-        self.model = model
+        # 'client' kept for backward compatibility; unused after refactor.
+        self.model_name = model
         self.bot_name = bot_name
         self.trace_enabled = trace_enabled
+        self._model = get_chat_model(model=model, temperature=0.5)
 
     async def generate(self, *, context: ReplyContext) -> str:
         prompt = response_user_prompt(context=context)
@@ -58,18 +59,34 @@ class OpenAIBotResponseGenerator(BotResponseGenerator):
                 mode,
             )
             logger.info("[bot.trace] response.prompt %r", prompt[:500])
-        text = await self.client.chat_text(
-            model=self.model,
-            system=system_prompt,
-            user=prompt,
-        )
+        text = None
+        if self._model is not None:
+            try:
+                try:
+                    from langchain.schema import SystemMessage, HumanMessage  # LC < 0.2
+                except Exception:  # pragma: no cover
+                    from langchain_core.messages import SystemMessage, HumanMessage  # LC >= 0.2
+
+                messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt)]
+                result = await self._model.ainvoke(messages)
+                text = (getattr(result, "content", None) or "").strip()
+            except Exception:
+                text = None
         if text:
             if self.trace_enabled:
                 logger.info("[bot.trace] response.output %r", text[:240])
             return self._sanitize_output(text)
+
+        # Heuristic fallbacks to avoid silence if LLM returns empty content
+        if context.user_message.startswith("EVENT: player_joined"):
+            return f"wb {context.username}"
         if context.route == ChatRoute.SIMPLE_REPLY:
             return f"{context.username}, good call. Keep tapping."
-        return ""
+        # Generic short acknowledgment
+        ack = f"hey {context.username}" if context.username else "hey"
+        if self.trace_enabled:
+            logger.info("[bot.trace] response.fallback %r", ack)
+        return ack
 
     def _sanitize_output(self, text: str) -> str:
         cleaned = text.strip()
@@ -77,3 +94,4 @@ class OpenAIBotResponseGenerator(BotResponseGenerator):
         pattern = re.compile(rf"^\s*{re.escape(self.bot_name)}\s*:\s*", re.IGNORECASE)
         cleaned = pattern.sub("", cleaned)
         return cleaned.strip()
+

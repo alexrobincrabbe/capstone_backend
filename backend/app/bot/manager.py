@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from .chat_engine import BotChatEngine
-from .config import BotConfig, ChatSendFn, TapFn
-from .gameplay_logic import BotGameplayLogic
+from .chat.engine import BotChatEngine
+from .config import BotConfig, ChatSendFn, TapFn, TraceEmitFn
+from .gameplay.logic import BotGameplayLogic
 
 
 @dataclass(frozen=True)
@@ -23,14 +23,24 @@ class BotController:
         self._tap_task: asyncio.Task[None] | None = None
         self._tap_stop_event: asyncio.Event | None = None
 
-    async def on_participant_joined(self, username: str, send_chat: ChatSendFn) -> None:
-        await self.chat.on_player_joined(username, send_chat)
+    async def on_participant_joined(
+        self,
+        username: str,
+        send_chat: ChatSendFn,
+        emit_trace: TraceEmitFn | None = None,
+    ) -> None:
+        await self.chat.on_player_joined(username, send_chat, emit_trace=emit_trace)
 
     async def on_round_started(self, send_chat: ChatSendFn) -> None:
         await self.chat.on_round_started(send_chat)
 
-    async def on_round_ended(self, send_chat: ChatSendFn, room_state: dict | None = None) -> None:
-        await self.chat.on_round_ended(send_chat, room_state=room_state)
+    async def on_round_ended(
+        self,
+        send_chat: ChatSendFn,
+        room_state: dict | None = None,
+        emit_trace: TraceEmitFn | None = None,
+    ) -> None:
+        await self.chat.on_round_ended(send_chat, room_state=room_state, emit_trace=emit_trace)
 
     async def on_chat_message(
         self,
@@ -40,6 +50,7 @@ class BotController:
         is_round_active: bool,
         participant_count: int,
         send_chat: ChatSendFn,
+        emit_trace: TraceEmitFn | None = None,
     ) -> None:
         await self.chat.on_chat_message(
             sender=sender,
@@ -47,6 +58,7 @@ class BotController:
             is_round_active=is_round_active,
             participant_count=participant_count,
             send_chat=send_chat,
+            emit_trace=emit_trace,
         )
 
     async def start_tapping(self, *, room, tap: TapFn) -> None:
@@ -93,9 +105,11 @@ class BotManager:
                 name=participant.name,
             )
 
-    async def on_participant_joined(self, username: str, send_chat: ChatSendFn) -> None:
+    async def on_participant_joined(
+        self, username: str, send_chat: ChatSendFn, emit_trace: TraceEmitFn | None = None
+    ) -> None:
         for controller in self.controllers:
-            await controller.on_participant_joined(username, send_chat)
+            await controller.on_participant_joined(username, send_chat, emit_trace=emit_trace)
 
     async def on_round_started(self, *, room, tap_by_participant_id, send_chat: ChatSendFn) -> None:
         for controller in self.controllers:
@@ -110,10 +124,15 @@ class BotManager:
 
             await controller.start_tapping(room=room, tap=tap_cb)
 
-    async def on_round_ended(self, send_chat: ChatSendFn, room_state: dict | None = None) -> None:
+    async def on_round_ended(
+        self,
+        send_chat: ChatSendFn,
+        room_state: dict | None = None,
+        emit_trace: TraceEmitFn | None = None,
+    ) -> None:
         for controller in self.controllers:
             await controller.stop_tapping()
-            await controller.on_round_ended(send_chat, room_state=room_state)
+            await controller.on_round_ended(send_chat, room_state=room_state, emit_trace=emit_trace)
 
     async def on_chat_message(
         self,
@@ -123,6 +142,7 @@ class BotManager:
         is_round_active: bool,
         participant_count: int,
         send_chat: ChatSendFn,
+        emit_trace: TraceEmitFn | None = None,
     ) -> None:
         for controller in self.controllers:
             await controller.on_chat_message(
@@ -131,6 +151,7 @@ class BotManager:
                 is_round_active=is_round_active,
                 participant_count=participant_count,
                 send_chat=send_chat,
+                emit_trace=emit_trace,
             )
 
 

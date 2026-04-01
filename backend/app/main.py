@@ -4,14 +4,16 @@ import importlib
 import json
 import logging
 import os
-import sqlite3
 from pathlib import Path
+
+import psycopg
 from typing import Any
 from urllib.parse import unquote
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .memory_db import memory_database_dsn_from_environ
 from .room import RoomManager
 from .websocket import (
     BotRoomAutomation,
@@ -98,14 +100,6 @@ def _build_automation(*, game_service: GameService, chat_service: ChatService) -
     )
 
 
-def _memory_db_path() -> Path:
-    configured = (os.getenv("BOT_MEMORY_DB_PATH") or "bot_memory.db").strip() or "bot_memory.db"
-    candidate = Path(configured)
-    if candidate.is_absolute():
-        return candidate
-    return Path(__file__).resolve().parents[1] / candidate
-
-
 app = FastAPI(title="Tap Game API")
 room = RoomManager()
 broadcaster = RoomBroadcaster(room)
@@ -120,6 +114,8 @@ coordinator = RealtimeRoomCoordinator(
     game_service=game_service,
     automation=automation,
 )
+if isinstance(automation, BotRoomAutomation):
+    automation.set_tap_participant_hook(coordinator.tap_participant)
 ws_service = WebSocketGameService(coordinator=coordinator)
 
 app.add_middleware(
@@ -143,25 +139,24 @@ async def health() -> dict[str, str]:
 
 @app.get("/api/memories/users")
 async def memory_users() -> dict[str, list[str]]:
-    db_path = _memory_db_path()
-    if not db_path.exists():
+    dsn = memory_database_dsn_from_environ()
+    if not dsn:
         return {"users": []}
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            users = [
-                str(row[0])
-                for row in conn.execute(
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
                     """
-                    SELECT DISTINCT username
+                    SELECT username
                     FROM semantic_memories
-                    ORDER BY username COLLATE NOCASE ASC
+                    GROUP BY username
+                    ORDER BY LOWER(username) ASC
                     """
-                ).fetchall()
-                if row and row[0]
-            ]
+                )
+                users = [str(row[0]) for row in cur.fetchall() if row and row[0]]
         return {"users": users}
-    except sqlite3.Error:
-        logger.exception("Failed to load memory users from %s", db_path)
+    except psycopg.Error:
+        logger.exception("Failed to load memory users from database")
         return {"users": []}
 
 
@@ -171,21 +166,23 @@ async def memory_records(username: str, limit: int = 100) -> dict[str, Any]:
     if not decoded_username:
         return {"username": "", "memories": []}
     bounded_limit = max(1, min(500, int(limit)))
-    db_path = _memory_db_path()
-    if not db_path.exists():
+    dsn = memory_database_dsn_from_environ()
+    if not dsn:
         return {"username": decoded_username, "memories": []}
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            rows = conn.execute(
-                """
-                SELECT id, memory_text, metadata_json
-                FROM semantic_memories
-                WHERE username = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (decoded_username, bounded_limit),
-            ).fetchall()
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, memory_text, metadata_json
+                    FROM semantic_memories
+                    WHERE username = %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                    """,
+                    (decoded_username, bounded_limit),
+                )
+                rows = cur.fetchall()
         memories = [
             {
                 "id": int(row[0]),
@@ -195,7 +192,7 @@ async def memory_records(username: str, limit: int = 100) -> dict[str, Any]:
             for row in rows
         ]
         return {"username": decoded_username, "memories": memories}
-    except (sqlite3.Error, ValueError, TypeError):
+    except (psycopg.Error, ValueError, TypeError):
         logger.exception("Failed to load memories for user %s", decoded_username)
         return {"username": decoded_username, "memories": []}
 
@@ -205,22 +202,23 @@ async def clear_memory_records(username: str) -> dict[str, Any]:
     decoded_username = unquote(username).strip()
     if not decoded_username:
         return {"username": "", "deleted": 0}
-    db_path = _memory_db_path()
-    if not db_path.exists():
+    dsn = memory_database_dsn_from_environ()
+    if not dsn:
         return {"username": decoded_username, "deleted": 0}
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            cur = conn.execute(
-                """
-                DELETE FROM semantic_memories
-                WHERE username = ?
-                """,
-                (decoded_username,),
-            )
-            deleted = int(cur.rowcount or 0)
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM semantic_memories
+                    WHERE username = %s
+                    """,
+                    (decoded_username,),
+                )
+                deleted = int(cur.rowcount or 0)
             conn.commit()
         return {"username": decoded_username, "deleted": deleted}
-    except sqlite3.Error:
+    except psycopg.Error:
         logger.exception("Failed to clear memories for user %s", decoded_username)
         return {"username": decoded_username, "deleted": 0}
 

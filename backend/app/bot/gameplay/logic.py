@@ -5,7 +5,7 @@ import random
 import time
 from typing import Any
 
-from .config import BotConfig, TapFn
+from ..config import BotConfig, TapFn
 
 
 class BotGameplayLogic:

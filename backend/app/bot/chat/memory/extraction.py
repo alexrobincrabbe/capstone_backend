@@ -1,15 +1,33 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 class MemoryExtractionService:
-    async def extract_memory(self, *, username: str, user_message: str) -> str | None:
+    async def extract_memory(
+        self,
+        *,
+        username: str,
+        user_message: str,
+        bot_reply: str | None = None,
+        memories: list[Any] | None = None,
+        stats: Any | None = None,
+    ) -> str | None:
         raise NotImplementedError
 
 
 class HeuristicMemoryExtractionService(MemoryExtractionService):
-    async def extract_memory(self, *, username: str, user_message: str) -> str | None:
+    async def extract_memory(
+        self,
+        *,
+        username: str,
+        user_message: str,
+        bot_reply: str | None = None,
+        memories: list[Any] | None = None,
+        stats: Any | None = None,
+    ) -> str | None:
+        del bot_reply, memories, stats  # hooks for richer extractors; heuristic uses user text only
         text = user_message.strip()
         lowered = text.lower()
         if len(text) < 12:

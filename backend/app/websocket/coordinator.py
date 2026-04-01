@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import time
+import logging
 
 from .broadcaster import RoomBroadcaster
 from .chat_service import ChatService
 from .connection import ClientConnection
 from .game_service import GameService
 from .room_automation import RoomAutomation
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class RealtimeRoomCoordinator:
@@ -24,7 +27,21 @@ class RealtimeRoomCoordinator:
         self.game_service = game_service
         self.automation = automation
         self._is_cleaning_dead_sockets = False
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self.chat_service.set_dead_socket_handler(self._cleanup_dead_sockets)
+
+    def _spawn_background(self, coro: asyncio.coroutines) -> None:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+
+        def _done(t: asyncio.Task[None]) -> None:
+            self._background_tasks.discard(t)
+            try:
+                t.result()
+            except Exception:
+                logger.exception("Background automation task failed")
+
+        task.add_done_callback(_done)
 
     async def startup(self) -> None:
         await self.automation.startup()
@@ -64,11 +81,15 @@ class RealtimeRoomCoordinator:
             is_bot=False,
             system=False,
         )
-        await self.automation.on_chat_message(
-            sender=sender,
-            text=trimmed,
-            is_round_active=(await self.game_service.get_status()) == "active",
-            participant_count=await self.game_service.get_participant_count(),
+        is_round_active = (await self.game_service.get_status()) == "active"
+        participant_count = await self.game_service.get_participant_count()
+        self._spawn_background(
+            self.automation.on_chat_message(
+                sender=sender,
+                text=trimmed,
+                is_round_active=is_round_active,
+                participant_count=participant_count,
+            )
         )
 
     async def handle_start_round(self, connection: ClientConnection) -> None:
@@ -85,7 +106,7 @@ class RealtimeRoomCoordinator:
     async def handle_tap(self, connection: ClientConnection) -> None:
         if connection.participant_id is None:
             return
-        await self._handle_tap_by_participant_id(connection.participant_id)
+        await self.tap_participant(connection.participant_id)
 
     async def handle_disconnect(self, connection: ClientConnection) -> None:
         participant_id = connection.participant_id
@@ -123,11 +144,13 @@ class RealtimeRoomCoordinator:
                 await self.chat_service.post_system_message("Round ended")
                 await self.automation.on_round_ended(snapshot)
 
-    async def _handle_tap_by_participant_id(self, participant_id: str) -> None:
+    async def tap_participant(self, participant_id: str) -> bool:
+        """Apply a tap and broadcast room state (human taps and bot taps)."""
         counted = await self.game_service.tap(participant_id)
         if counted:
             await self._broadcast({"type": "scores_updated"})
             await self._broadcast_room_state()
+        return counted
 
     async def _broadcast(self, event: dict) -> None:
         dead = await self.broadcaster.broadcast(event)

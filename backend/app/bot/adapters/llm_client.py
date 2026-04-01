@@ -99,3 +99,4 @@ class OpenAIClient:
         except Exception as exc:
             logger.warning("OpenAI embedding failed: %s", exc)
             return None
+

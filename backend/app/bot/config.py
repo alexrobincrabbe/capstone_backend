@@ -4,7 +4,10 @@ import os
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from ..memory_db import memory_database_dsn_from_environ
+
 ChatSendFn = Callable[..., Awaitable[None]]
+TraceEmitFn = Callable[..., Awaitable[None]]
 TapFn = Callable[[], Awaitable[None]]
 
 
@@ -15,10 +18,12 @@ class BotConfig:
     # 1..10 (higher = more frequent taps / replies)
     skill_level: int = 6
     recent_message_limit: int = 8
+    context_history_limit: int = 4
     llm_router_model: str = "gpt-4o-mini"
     llm_response_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
-    semantic_memory_db_path: str = "bot_memory.db"
+    # Supabase / Postgres URI (see DATABASE_URL in env)
+    database_url: str | None = None
     trace_enabled: bool = False
 
     @staticmethod
@@ -35,6 +40,11 @@ class BotConfig:
         except ValueError:
             recent_limit = 8
         recent_limit = max(2, min(20, recent_limit))
+        try:
+            context_history_limit = int(os.getenv("BOT_CONTEXT_HISTORY_LIMIT") or "4")
+        except ValueError:
+            context_history_limit = 4
+        context_history_limit = max(1, min(recent_limit, context_history_limit))
         trace_enabled = (os.getenv("BOT_TRACE") or "").strip().lower() in {
             "1",
             "true",
@@ -46,10 +56,11 @@ class BotConfig:
             personality=personality,
             skill_level=skill,
             recent_message_limit=recent_limit,
+            context_history_limit=context_history_limit,
             llm_router_model=(os.getenv("BOT_LLM_ROUTER_MODEL") or "gpt-4o-mini").strip(),
             llm_response_model=(os.getenv("BOT_LLM_RESPONSE_MODEL") or "gpt-4o-mini").strip(),
             embedding_model=(os.getenv("BOT_EMBEDDING_MODEL") or "text-embedding-3-small").strip(),
-            semantic_memory_db_path=(os.getenv("BOT_MEMORY_DB_PATH") or "bot_memory.db").strip(),
+            database_url=memory_database_dsn_from_environ(),
             trace_enabled=trace_enabled,
         )
 

@@ -1,0 +1,53 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	event_gate(event_gate)
+	player_join(player_join)
+	round_end(round_end)
+	spam_filter(spam_filter)
+	targeting(targeting)
+	policy(policy)
+	decide(decide)
+	plan_memory_retrieval(plan_memory_retrieval)
+	gather_context(gather_context)
+	generate(generate)
+	decide_memory_write(decide_memory_write)
+	persist_memory(persist_memory)
+	sanitize(sanitize)
+	humanize(humanize)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> event_gate;
+	decide -.-> __end__;
+	decide -.-> gather_context;
+	decide -.-> plan_memory_retrieval;
+	decide -.-> sanitize;
+	decide_memory_write -.-> persist_memory;
+	decide_memory_write -.-> sanitize;
+	event_gate -.-> __end__;
+	event_gate -.-> player_join;
+	event_gate -.-> round_end;
+	event_gate -.-> spam_filter;
+	gather_context --> generate;
+	generate --> decide_memory_write;
+	persist_memory --> sanitize;
+	plan_memory_retrieval --> gather_context;
+	player_join -.-> __end__;
+	player_join -.-> sanitize;
+	policy -.-> __end__;
+	policy -.-> decide;
+	round_end -.-> __end__;
+	round_end -.-> sanitize;
+	sanitize --> humanize;
+	spam_filter -.-> __end__;
+	spam_filter -.-> sanitize;
+	spam_filter -.-> targeting;
+	targeting -.-> __end__;
+	targeting -.-> policy;
+	humanize --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
