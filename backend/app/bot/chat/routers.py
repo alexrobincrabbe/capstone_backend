@@ -115,6 +115,7 @@ def _finalize_route_decision(
     need_stats: bool,
     need_history: bool,
     directed_at_bot_from_model: bool | None,
+    goodbye_context_from_model: str | None,
     targeting_hint: str,
     participant_count: int,
     route_parse_failed: bool,
@@ -131,6 +132,7 @@ def _finalize_route_decision(
             need_history=False,
             ignore_reason="explicitly_addressed_to_another_participant",
             directed_at_bot=False,
+            goodbye_context=goodbye_context_from_model,
         )
 
     directed_at_bot: bool
@@ -154,6 +156,7 @@ def _finalize_route_decision(
                     need_history=False,
                     ignore_reason="ambiguous_directedness_unset",
                     directed_at_bot=False,
+                    goodbye_context=goodbye_context_from_model,
                 )
         else:
             directed_at_bot = directed_at_bot_from_model
@@ -170,6 +173,7 @@ def _finalize_route_decision(
             need_history=False,
             ignore_reason=ir[:220],
             directed_at_bot=False,
+            goodbye_context=goodbye_context_from_model,
         )
 
     r = route
@@ -213,6 +217,7 @@ def _finalize_route_decision(
         need_history=nh,
         ignore_reason=ir,
         directed_at_bot=True,
+        goodbye_context=goodbye_context_from_model,
     )
 
 
@@ -268,6 +273,14 @@ def _parse_router_json_payload(content: str) -> dict[str, Any] | None:
     if start >= 0 and end > start:
         return _try_load(text[start : end + 1])
     return None
+
+
+def _parse_goodbye_context_field(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    s = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    allowed = {"to_bot_or_room", "to_other_user", "leaving_self", "unclear"}
+    return s if s in allowed else None
 
 
 class DeterministicChatRouter:
@@ -455,6 +468,7 @@ class OpenAILLMChatRouter(LLMChatRouter):
             need_history = bool(payload.get("need_history", False))
 
         directed_raw = _parse_directed_at_bot_field(payload.get("directed_at_bot"))
+        goodbye_context = _parse_goodbye_context_field(payload.get("goodbye_context"))
 
         decision = _finalize_route_decision(
             route=route,
@@ -463,6 +477,7 @@ class OpenAILLMChatRouter(LLMChatRouter):
             need_stats=need_stats,
             need_history=need_history,
             directed_at_bot_from_model=directed_raw,
+            goodbye_context_from_model=goodbye_context,
             targeting_hint=hint,
             participant_count=participant_count,
             route_parse_failed=route_parse_failed,

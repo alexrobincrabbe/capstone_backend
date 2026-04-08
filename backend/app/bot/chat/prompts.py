@@ -9,7 +9,7 @@ def router_system_prompt() -> str:
         "Reply with a single raw JSON object only, with no markdown and no extra text. "
 
         "Output keys: "
-        "route, privacy_blocked, need_stats, need_history, ignore_reason, directed_at_bot. "
+        "route, privacy_blocked, need_stats, need_history, ignore_reason, directed_at_bot, goodbye_context. "
 
         "Allowed route values: ignore, simple_reply, memory_reply, detailed_reply. "
 
@@ -21,6 +21,7 @@ def router_system_prompt() -> str:
         "need_stats is boolean. "
         "need_history is boolean. "
         "ignore_reason is a short snake_case string when route=ignore, otherwise null. "
+        "goodbye_context is one of: to_bot_or_room, to_other_user, leaving_self, unclear, or null when not a goodbye. "
 
         "Audience rules: "
         "If targeting_hint is directed, set directed_at_bot=true. "
@@ -35,6 +36,9 @@ def router_system_prompt() -> str:
         "If farewell_piggyback_likely is true, another human just signaled they were leaving and the current message is "
         "only a minimal sign-off (e.g. 'bye!'). It is usually for that person / the table, not the bot: set directed_at_bot=false "
         "and route=ignore unless they clearly name the bot or speak to everyone including the bot. "
+        "Follow-up context rule: if recent context shows the bot just engaged this same user (asked them a question, replied to them, "
+        "or they are in an active back-and-forth with the bot), treat their immediate follow-up question/answer as directed_at_bot=true "
+        "even when the bot name is omitted. "
 
         "Main routing policy: "
         "Use ignore for messages that do not need a reply. "
@@ -51,6 +55,8 @@ def router_system_prompt() -> str:
         "Use simple_reply when a normal reply is clearly warranted. "
         "Direct questions usually need a reply and should not usually be labeled acknowledgement_only or no_response_needed."
         "Follow-up questions usually need a reply. "
+        "In contextual back-and-forth with the bot, concise follow-up questions like 'where you from?', 'what about you?', "
+        "or 'and you?' should normally be treated as directed and answered. "
         "Messages checking for the bot's presence usually need a reply. "
         "Questions about the latest round outcome (winner/score/result/what happened last round) should usually be simple_reply, "
         "because last_round_outcome is already provided in state context and does not require semantic memory retrieval. "
@@ -186,6 +192,7 @@ def router_user_prompt(
         f"history_excerpt=\n{history_excerpt}\n"
         f"last_round_outcome={last_round_outcome}\n"
         "Apply targeting_hint first, then choose route and directed_at_bot per system instructions.\n"
+        "If the message is a goodbye/sign-off, also set goodbye_context based on history/context.\n"
     )
 
 
@@ -209,13 +216,16 @@ def response_system_prompt_rich(*, bot_name: str) -> str:
         "Avoid over-enthusiasm and avoid generic assistant phrasing. "
         f"Your name is {bot_name}. "
         "Use provided memories/stats/history when relevant to the route. "
-        "If a memory line shows a low similarity score, treat it as uncertain — do not state it as a definite fact. "
+        "Each memory line may include [similarity=0-1]: that is retrieval relevance, not truth score. "
+        "If similarity is very low (roughly under 0.25) or the memory is clearly off-topic, do not treat it as fact. "
+        "If similarity is moderate or higher (about 0.35+) and the memory text clearly answers the user's question, "
+        "answer from it in natural speech — do not say you lack that detail. "
+        "Never dismiss a memory that explicitly matches what they asked (e.g. cookie preference) just because similarity is not max. "
         "If memories include preferred name, gender, or last-seen context, use them naturally when helpful. "
         "Never guess gender if it is not in memory. "
         "When asking about prior interaction or personal context, be warm and conversational. "
         "When memories or stats indicate prior games, you may acknowledge you have played before when it fits. "
         "Avoid robotic lines like 'I don't have any memories of you yet'. "
-        "For farewells and room sign-offs, reply briefly in kind (vary phrasing). "
         "Do not include speaker prefixes in your reply."
     )
 
@@ -264,6 +274,6 @@ def response_user_prompt(*, context: ReplyContext) -> str:
         f"Memories:\n{mem_block}\n"
         f"Stats: {context.stats}\n"
         f"Recent conversation (oldest first):\n{_format_recent_turn_lines(context)}\n"
-        "Write a short, natural reply aligned with the selected route and the Message (including farewells when appropriate)."
+        "Write a short, natural reply aligned with the selected route and the Message."
     )
 

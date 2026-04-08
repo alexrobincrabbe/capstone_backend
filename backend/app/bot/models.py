@@ -25,6 +25,9 @@ class RouteDecision:
     ignore_reason: str | None = None
     # Semantic directedness at the bot (multi-party ambiguous turns are decided here; targeting only prefilters).
     directed_at_bot: bool | None = None
+    # Optional router annotation for goodbye disambiguation:
+    # "to_bot_or_room", "to_other_user", "leaving_self", "unclear", or None.
+    goodbye_context: str | None = None
 
 
 MemoryRetrievalMode = Literal["none", "broad_profile", "callback", "specific_fact", "general"]

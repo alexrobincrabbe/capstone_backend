@@ -19,6 +19,8 @@ from .memory.write_decision_service import is_redundant_username_memory
 
 MAX_MEMORY_RETRIEVAL_RESULTS = 3
 DEFAULT_CONTEXT_HISTORY_LIMIT = 4
+# Keep legacy probabilistic policy gate code available, but disabled for reproducibility.
+ENABLE_RANDOM_POLICY_GATE = False
 
 
 class ChatState(TypedDict, total=False):
@@ -73,6 +75,7 @@ class ChatState(TypedDict, total=False):
     need_stats: bool
     need_history: bool
     ignore_reason: Optional[str]
+    router_goodbye_context: Optional[str]
 
     # memory retrieval plan (LLM advisory + coerced fields; execution clamps in gather_context)
     use_memory: bool
@@ -278,6 +281,7 @@ def build_chat_graph(deps: GraphDeps):
             "policy_allowed",
             "route",
             "ignore_reason",
+            "router_goodbye_context",
             "privacy_blocked",
             "need_stats",
             "need_history",
@@ -498,6 +502,29 @@ def build_chat_graph(deps: GraphDeps):
             state, bot_name=state.get("bot_name") or ""
         )
 
+        # Aggressive vocative targeting: if message starts with bot name (or short bot-name prefix),
+        # treat as directed even without punctuation (e.g. "tap where you from").
+        if bot_name:
+            first_word = re.match(r"^\s*([a-z][\w-]{1,31})\b", text, re.IGNORECASE)
+            if first_word:
+                w = first_word.group(1).lower()
+                if w == bot_name or (len(w) >= 3 and bot_name.startswith(w)):
+                    out0: ChatState = dict(state)
+                    out0["is_explicitly_directed"] = True
+                    out0["is_explicitly_not_for_bot"] = False
+                    out0["target_blocked"] = False
+                    return out0
+            # Also treat trailing addressee variants as directed (e.g. "where you from tap").
+            tail_word = re.search(r"\b([a-z][\w-]{1,31})\s*[\?\.!,;:]*\s*$", text, re.IGNORECASE)
+            if tail_word:
+                w = tail_word.group(1).lower()
+                if w == bot_name or (len(w) >= 3 and bot_name.startswith(w)):
+                    out0: ChatState = dict(state)
+                    out0["is_explicitly_directed"] = True
+                    out0["is_explicitly_not_for_bot"] = False
+                    out0["target_blocked"] = False
+                    return out0
+
         # "bye tap!" / "hey tap" — vocative is a prefix nickname of the bot (avoid matching bare "tap" mid-sentence).
         if bot_name and len(bot_name) >= 4:
             voc = re.match(
@@ -593,22 +620,23 @@ def build_chat_graph(deps: GraphDeps):
         participants = int(state.get("participant_count") or 0)
         seconds_since = state.get("seconds_since_last_bot_message")
         skill_level = int(state.get("skill_level") or 0)
-
-        provisional_directed = explicitly_directed or participants <= 2
-        # More than two participants and no explicit recipient: router still must run for directedness + routing.
-        needs_ambiguous_router = participants > 2 and not explicitly_directed
-        is_directed_for_gate = provisional_directed or needs_ambiguous_router
-
-        if is_directed_for_gate:
+        # Direct messages should pass immediately.
+        if explicitly_directed or participants <= 2:
             allow = True
+            is_directed_for_gate = True
         else:
-            # Non-directed multi-party chatter: throttle by recency, then probabilistic gate by skill.
-            if seconds_since is not None and float(seconds_since) < 8.0:
+            # Ambiguous multi-party chatter: deterministic cooldown gate only.
+            if seconds_since is not None and float(seconds_since) < 1.0:
                 allow = False
             else:
-                skill = max(0, min(5, skill_level))
-                base_chance = 0.10 + (skill * 0.12)  # 10%..70%
-                allow = random.random() < base_chance
+                if ENABLE_RANDOM_POLICY_GATE:
+                    # Legacy probabilistic gate (disabled by default).
+                    skill = max(0, min(5, skill_level))
+                    base_chance = 0.10 + (skill * 0.12)  # 10%..70%
+                    allow = random.random() < base_chance
+                else:
+                    allow = True
+            is_directed_for_gate = bool(allow)
 
         out: ChatState = dict(state)
         out["policy_allowed"] = allow
@@ -634,6 +662,7 @@ def build_chat_graph(deps: GraphDeps):
             out["need_history"] = False
             out["ignore_reason"] = "router_unavailable"
             out["router_directed_at_bot"] = None
+            out["router_goodbye_context"] = None
             logger.info(
                 "[bot.trace] graph.decide route=ignore sender=%s reason=%r text=%r",
                 (state.get("sender") or "").strip()[:80],
@@ -654,6 +683,7 @@ def build_chat_graph(deps: GraphDeps):
             out_wr["need_history"] = False
             out_wr["ignore_reason"] = "post_round_gg_echo"
             out_wr["router_directed_at_bot"] = False
+            out_wr["router_goodbye_context"] = None
             out_wr["is_directed"] = False
             logger.info(
                 "[bot.trace] graph.decide route=ignore sender=%s reason=post_round_gg_echo text=%r",
@@ -697,6 +727,7 @@ def build_chat_graph(deps: GraphDeps):
         # Decide owns whether memory retrieval should happen at all.
         out["use_memory"] = decision.route == ChatRoute.MEMORY_REPLY
         out["router_directed_at_bot"] = decision.directed_at_bot
+        out["router_goodbye_context"] = decision.goodbye_context
         out["short_farewell_opener"] = short_farewell_opener
         out["recent_other_human_leave"] = recent_other_human_leave
         out["farewell_piggyback_likely"] = farewell_piggyback_likely
